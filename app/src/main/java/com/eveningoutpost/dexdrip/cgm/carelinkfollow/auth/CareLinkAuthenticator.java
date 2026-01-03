@@ -355,6 +355,8 @@ public class CareLinkAuthenticator {
         if (response.isSuccessful()) {
             return JsonParser.parseString(response.body().string()).getAsJsonObject();
         } else if(response.code() == 403) {
+            String body = response.body().string();
+            UserError.Log.e(TAG, "Refresh token could not be used, error: "+body);
             // see https://auth0.com/docs/api/authentication/refresh-token/refresh-token#response-messages
             // 403 Forbidden. The refresh token is invalid or has expired.
             throw new RefreshTokenExpiredException("The Refresh token has expired");
@@ -392,17 +394,34 @@ public class CareLinkAuthenticator {
         try {
             //Get config
             this.loadAppConfig();
+
+            UserError.Log.d(TAG, "Old refresh token: " + credentialStore.getCredential().refreshToken);
+
             //Refresh token
             tokenRefreshResult = this.refreshToken(
                     credentialStore.getCredential().clientId, credentialStore.getCredential().clientSecret, credentialStore.getCredential().refreshToken);
+
+            UserError.Log.d(TAG, "New refresh token: " + tokenRefreshResult.get("refresh_token").getAsString());
+
+            String refreshToken = tokenRefreshResult.get("refresh_token").getAsString();
+            if (refreshToken == null || refreshToken.isEmpty()) { // if refresh token not returned, keep using old one
+                refreshToken = credentialStore.getCredential().refreshToken;
+            }
+            
+            String accessToken = tokenRefreshResult.get("access_token").getAsString();
+            if (accessToken == null || accessToken.isEmpty()) {
+                UserError.Log.e(TAG, "No access token returned on refresh!");
+                accessToken = credentialStore.getCredential().accessToken;
+            }
+
             //Save token
             credentialStore.updateMobileAppCredential(
-                    tokenRefreshResult.get("access_token").getAsString(),
+                    accessToken,
                     //new Date(Calendar.getInstance().getTime().getTime() + 15 * 60000),
                     //new Date(Calendar.getInstance().getTime().getTime() + 30 * 60000),
                     new Date(Calendar.getInstance().getTime().getTime() + (tokenRefreshResult.get("expires_in").getAsInt() * 1000)),
                     null,
-                    tokenRefreshResult.get("refresh_token").getAsString());
+                    refreshToken);
             //Completed successfully
             return true;
         } catch (Exception ex) {
