@@ -104,6 +104,7 @@ public class CareLinkAuthenticator {
             //new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSX")
     };
 
+    private static final int PKCE_CODE_VERIFIER_BYTE_LENGTH = 32;
     private static final int PKCE_BASE64_ENCODE_SETTINGS =
             Base64.NO_WRAP | Base64.NO_PADDING | Base64.URL_SAFE;
 
@@ -190,7 +191,8 @@ public class CareLinkAuthenticator {
 
             //Prepare authentication
             UserError.Log.d(TAG, "Prepare authentication");
-            authUrl = createAuthUrl();
+            String codeVerifier = generateCodeVerifier();
+            authUrl = createAuthUrl(codeVerifier);
 
             //Hide progress dialog
             this.hideProgressDialog();
@@ -212,7 +214,7 @@ public class CareLinkAuthenticator {
 
                 //Get access token
                 UserError.Log.d(TAG, "Get access token");
-                JsonObject tokenObject = this.getAccessToken(clientId, null, authCode);
+                JsonObject tokenObject = this.getAccessToken(clientId, null, authCode, codeVerifier);
 
                 //Store credentials
                 UserError.Log.d(TAG, "Store credentials");
@@ -254,7 +256,31 @@ public class CareLinkAuthenticator {
         }
     }
 
-    private String createAuthUrl() {
+    private String generateCodeVerifier() {
+        SecureRandom secureRandom = new SecureRandom();
+
+        byte[] codeVerifier = new byte[PKCE_CODE_VERIFIER_BYTE_LENGTH];
+        secureRandom.nextBytes(codeVerifier);
+
+        return Base64.encodeToString(codeVerifier, PKCE_BASE64_ENCODE_SETTINGS);
+    }
+    
+    private String pkceDeriveCodeChallenge(String codeVerifier) {
+        String codeChallenge = null;
+
+        try {
+            return Base64.encodeToString(
+                    MessageDigest.getInstance("SHA-256").digest(codeVerifier.getBytes("ISO_8859_1")),
+                    PKCE_BASE64_ENCODE_SETTINGS);
+        } catch (Exception ex) {
+        }
+
+        return null;
+    }
+
+    private String createAuthUrl(String codeVerifier) {
+        String codeChallenge = pkceDeriveCodeChallenge(codeVerifier);
+
         return new HttpUrl.Builder()
             .scheme("https")
             .host(carepartnerAppConfig.getSSOServerHost())
@@ -266,6 +292,8 @@ public class CareLinkAuthenticator {
             .addQueryParameter("scope", carepartnerAppConfig.getOAuthScope())
             .addQueryParameter("redirect_uri", carepartnerAppConfig.getOAuthRedirectUri())
             .addQueryParameter("audience", carepartnerAppConfig.getOAuthAudience())
+            .addQueryParameter("code_challenge_method", "S256")
+            .addQueryParameter("code_challenge", codeChallenge)
             .build()
             .toString();
     }
@@ -299,15 +327,15 @@ public class CareLinkAuthenticator {
         return true;
     }
 
-    private JsonObject getAccessToken(String clientId, String clientSecret, String idToken) throws IOException {
-        return this.getToken(clientId, clientSecret, idToken, null);
+    private JsonObject getAccessToken(String clientId, String clientSecret, String idToken, String codeVerifier) throws IOException {
+        return this.getToken(clientId, clientSecret, idToken, null, codeVerifier);
     }
 
     private JsonObject refreshToken(String clientId, String clientSecret, String refreshToken) throws IOException {
-        return this.getToken(clientId, clientSecret, null, refreshToken);
+        return this.getToken(clientId, clientSecret, null, refreshToken, null);
     }
 
-    private JsonObject getToken(String clientId, String clientSecret, String idToken,  String refreshToken) throws IOException {
+    private JsonObject getToken(String clientId, String clientSecret, String idToken,  String refreshToken, String codeVerifier) throws IOException {
 
         Request.Builder requestBuilder;
         FormBody.Builder form;
@@ -324,6 +352,9 @@ public class CareLinkAuthenticator {
             form.add("code", idToken)
                     .add("grant_type", "authorization_code")
                     .add("redirect_uri", this.carepartnerAppConfig.getOAuthRedirectUri());
+            if (codeVerifier != null) {
+                form.add("code_verifier", codeVerifier);
+            }
             //Refresh token request params
         } else {
             form.add("refresh_token", refreshToken)
